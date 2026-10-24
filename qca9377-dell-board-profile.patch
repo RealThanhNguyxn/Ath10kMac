@@ -18,7 +18,7 @@ diff --git a/scripts/prepare-firmware.py b/scripts/prepare-firmware.py
      board_container = (folder / "board-2.bin").read_bytes()
      fw_container = (folder / "firmware-6.bin").read_bytes()
      selection = "board-api2-exact"
-@@ -216,7 +217,10 @@ def prepare_profile(root, folder, namespace, board_key, profile, identity, allow
+@@ -216,6 +217,10 @@ def prepare_profile(root, folder, namespace, board_key, profile, identity, allow
                 f"static constexpr UInt32 kFirmwareEntryAddress = 0x{entry:08x}u;", ""]
  
 -    outdir = root / "firmware/prepared" / ("QCA9377" if allow_fallback else "")
@@ -55,7 +55,7 @@ diff --git a/firmware/QCA9377/hw1.0/PROVENANCE.json b/firmware/QCA9377/hw1.0/PRO
 diff --git a/tests/test_payload.py b/tests/test_payload.py
 --- a/tests/test_payload.py
 +++ b/tests/test_payload.py
-@@ -55,2 +55,21 @@ class PayloadTests(unittest.TestCase):
+@@ -55,4 +55,23 @@ class PayloadTests(unittest.TestCase):
  
 +    def test_qca9377_dell_profile_uses_exact_board_or_validated_fallback(self):
 +        folder = ROOT / 'firmware/QCA9377/hw1.0'
@@ -97,7 +97,7 @@ diff --git a/tests/test_qca9377_flow.cpp b/tests/test_qca9377_flow.cpp
 diff --git a/tests/run-tests.sh b/tests/run-tests.sh
 --- a/tests/run-tests.sh
 +++ b/tests/run-tests.sh
-@@ -1,6 +1,7 @@
+@@ -1,7 +1,8 @@
  #!/bin/sh
  set -eu
  cd "$(dirname "$0")/.."
