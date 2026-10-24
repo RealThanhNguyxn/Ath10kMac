@@ -1,0 +1,108 @@
+diff --git a/scripts/prepare-firmware.py b/scripts/prepare-firmware.py
+--- a/scripts/prepare-firmware.py
++++ b/scripts/prepare-firmware.py
+@@ -14,6 +14,7 @@ FW_MAGIC = b"QCA-ATH10K\0"
+ BOARD_KEY = "bus=pci,vendor=168c,device=003e,subsystem-vendor=1028,subsystem-device=0310"
+ BOARD_SIZE = 8124
+ QCA9377_BOARD_KEY = "bus=pci,vendor=168c,device=0042,subsystem-vendor=1235,subsystem-device=0901"
++QCA9377_DELL_BOARD_KEY = "bus=pci,vendor=168c,device=0042,subsystem-vendor=1028,subsystem-device=1818"
+ 
+ class BoardNotFound(ValueError):
+     """Only a well-formed API2 container without a match allows API1 fallback."""
+@@ -149,7 +150,7 @@ def parse_segments(data):
+     return segments, entry
+ 
+ 
+-def prepare_profile(root, folder, namespace, board_key, profile, identity, allow_fallback=False):
++def prepare_profile(root, folder, namespace, board_key, profile, identity, allow_fallback=False, prepared_subdir=None):
+     board_container = (folder / "board-2.bin").read_bytes()
+     fw_container = (folder / "firmware-6.bin").read_bytes()
+     selection = "board-api2-exact"
+@@ -216,7 +217,10 @@ def prepare_profile(root, folder, namespace, board_key, profile, identity, allow
+                f"static constexpr UInt32 kFirmwareEntryAddress = 0x{entry:08x}u;", ""]
+ 
+-    outdir = root / "firmware/prepared" / ("QCA9377" if allow_fallback else "")
++    if prepared_subdir is None:
++        prepared_subdir = "QCA9377" if allow_fallback else ""
++    outdir = root / "firmware/prepared"
++    if prepared_subdir:
++        outdir = outdir / prepared_subdir
+     outputs = {
+         outdir / "board.bin": board,
+         outdir / "firmware-image.bin": parts[3],
+@@ -244,7 +248,12 @@ def main():
+         (root / 'firmware', 'Ath10kPayload', BOARD_KEY, 'QCA6174/hw3.2',
+          ('0x003e', '0x1028', '0x0310', '10', '0x05030000u'), False),
+         (root / 'firmware/QCA9377/hw1.0', 'Ath10kPayload9377', QCA9377_BOARD_KEY, 'QCA9377/hw1.1',
+          ('0x0042', '0x1235', '0x0901', '1', '0x05020001u'), True),
++        # Dell Inspiron 14 3467 reports subsystem 1028:1818. Prefer its exact
++        # API2 board entry; only use the validated API1 fallback if no exact
++        # entry exists, matching Linux ath10k's board-file policy.
++        (root / 'firmware/QCA9377/hw1.0', 'Ath10kPayload9377Dell', QCA9377_DELL_BOARD_KEY,
++         'QCA9377/hw1.1-Dell-1028-1818', ('0x0042', '0x1028', '0x1818', '1', '0x05020001u'), True, 'QCA9377Dell'),
+     ]
+     for args in profiles:
+         files, lines, entry = prepare_profile(root, *args)
+diff --git a/firmware/QCA9377/hw1.0/PROVENANCE.json b/firmware/QCA9377/hw1.0/PROVENANCE.json
+--- a/firmware/QCA9377/hw1.0/PROVENANCE.json
++++ b/firmware/QCA9377/hw1.0/PROVENANCE.json
+@@ -24,4 +24,4 @@
+   },
+   "license": "../../LICENSE.QualcommAtheros_ath10k; notice_ath10k_firmware-6.txt",
+-  "board_policy": "Exact API2 PCI key first. No 1235:0901 match in supplied board-2.bin; API1 board.bin fallback following Linux v6.12 core.c. Do not use the 17aa:0901 entry as an exact 1235 match."
++  "board_policy": "Each explicitly allowlisted QCA9377 PCI key first requires an exact API2 board-2.bin match; API1 board.bin fallback is allowed only for a well-formed container with no exact key, following Linux v6.12 core.c. The 1235:0901 and Dell 1028:1818 profiles are separate; never treat the 17aa:0901 entry as an exact match for either. QCA9377 remains untested on real hardware."
+ }
+diff --git a/tests/test_payload.py b/tests/test_payload.py
+--- a/tests/test_payload.py
++++ b/tests/test_payload.py
+@@ -55,2 +55,21 @@ class PayloadTests(unittest.TestCase):
+ 
++    def test_qca9377_dell_profile_uses_exact_board_or_validated_fallback(self):
++        folder = ROOT / 'firmware/QCA9377/hw1.0'
++        files, header, entry = p.prepare_profile(ROOT, folder, 'Ath10kPayload9377Dell',
++            p.QCA9377_DELL_BOARD_KEY, 'QCA9377/hw1.1-Dell-1028-1818',
++            ('0x0042', '0x1028', '0x1818', '1', '0x05020001u'), True, 'QCA9377Dell')
++        import json
++        manifest = json.loads(files[ROOT / 'firmware/prepared/QCA9377Dell/manifest.json'])
++        self.assertEqual(manifest['board_key'], p.QCA9377_DELL_BOARD_KEY)
++        self.assertEqual(manifest['profile'], 'QCA9377/hw1.1-Dell-1028-1818')
++        self.assertIn(manifest['board_selection'], ('board-api2-exact', 'board-api1-fallback'))
++        self.assertEqual(manifest['firmware_version'], 'WLAN.TF.2.1-00021-QCARMSWP-1')
++        self.assertEqual(manifest['firmware_bytes'], 727125)
++        self.assertEqual(manifest['otp_bytes'], 24193)
++        self.assertEqual(manifest['board_bytes'], 8124)
++        if manifest['board_selection'] == 'board-api1-fallback':
++            self.assertEqual(manifest['board_sha256'],
++                '127d35d82edb46278f30c448cbca664d755ff0d5fed57b649959cdbc4208c768')
++        self.assertIn('0x0042, 0x1028, 0x1818, 1, 0x05020001u', entry)
++
+     def test_fallback_rejects_corrupt_container_and_foreign_firmware(self):
+         folder = ROOT / 'firmware/QCA9377/hw1.0'
+         with self.assertRaises(p.BoardNotFound):
+diff --git a/tests/test_qca9377_flow.cpp b/tests/test_qca9377_flow.cpp
+--- a/tests/test_qca9377_flow.cpp
++++ b/tests/test_qca9377_flow.cpp
+@@ -10,6 +10,11 @@ int main(){
+     assert(p.matchesTarget(0x05020001,8,12));
+     for(auto version:{0x05030000u,0x05020000u,0u})assert(!p.matchesTarget(version,8,12));
+     assert(!p.matchesTarget(0x05020001,7,12) && !p.matchesTarget(0x05020001,8,8));
++    const auto &dell=Ath10kPayload::selectProfile(0x168c,0x0042,0x1028,0x1818,1);
++    assert(dell.available && dell.targetVersion==0x05020001 && dell.kBoardSize==8124);
++    assert(dell.kFirmwareSize==727125 && dell.matchesTarget(0x05020001,8,12));
++    assert(dell.boardAddressValid(0x401000));
++    assert(!Ath10kPayload::selectProfile(0x168c,0x0042,0x1028,0x1818,0).available);
+     assert(!Ath10kPayload::selectProfile(0x168c,0x0042,0x1235,0x0902,1).available);
+     assert(!Ath10kPayload::selectProfile(0x168c,0x0042,0x1235,0x0901,0).available);
+     assert(!Ath10kPayload::selectProfile(0x1234,0x0042,0x1235,0x0901,1).available);
+diff --git a/tests/run-tests.sh b/tests/run-tests.sh
+--- a/tests/run-tests.sh
++++ b/tests/run-tests.sh
+@@ -1,6 +1,7 @@
+ #!/bin/sh
+ set -eu
+ cd "$(dirname "$0")/.."
++python3 scripts/prepare-firmware.py
+ ASAN_OPTIONS=detect_leaks=0 python3 tests/test-user-access.py
+ python3 -m unittest discover -s tests -p 'test_*.py' -v
+ test_tmp_dir=$(mktemp -d)
+ trap 'rm -rf "$test_tmp_dir"' EXIT HUP INT TERM
