@@ -9,6 +9,13 @@ int main(){
     assert(p.matchesTarget(0x05020001,8,12));
     for(auto version:{0x05030000u,0x05020000u,0u})assert(!p.matchesTarget(version,8,12));
     assert(!p.matchesTarget(0x05020001,7,12) && !p.matchesTarget(0x05020001,8,8));
+    const auto &dell=Ath10kPayload::selectProfile(0x168c,0x0042,0x1028,0x1818,1);
+    assert(dell.available && dell.targetVersion==0x05020001 && dell.kBoardSize==8124);
+    assert(dell.kFirmwareSize==727125 && dell.matchesTarget(0x05020001,8,12));
+    assert(&dell!=&p && !strcmp(dell.kBoardKey,"bus=pci,vendor=168c,device=0042,subsystem-vendor=1028,subsystem-device=1818"));
+    assert(!Ath10kPayload::selectProfile(0x168c,0x0042,0x1028,0x1818,0).available);
+    assert(!Ath10kPayload::selectProfile(0x168c,0x0042,0x1028,0x1819,1).available);
+    assert(!Ath10kPayload::selectProfile(0x1234,0x0042,0x1028,0x1818,1).available);
     assert(!Ath10kPayload::selectProfile(0x168c,0x0042,0x1235,0x0902,1).available);
     assert(!Ath10kPayload::selectProfile(0x168c,0x0042,0x1235,0x0901,0).available);
     assert(!Ath10kPayload::selectProfile(0x1234,0x0042,0x1235,0x0901,1).available);

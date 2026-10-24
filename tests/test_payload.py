@@ -53,6 +53,35 @@ class PayloadTests(unittest.TestCase):
         self.assertEqual(manifest['board_sha256'],
             '127d35d82edb46278f30c448cbca664d755ff0d5fed57b649959cdbc4208c768')
 
+    def test_qca9377_dell_profile_selection_and_validated_fallback_data(self):
+        # Validates data selection only; says nothing about real Dell hardware behavior.
+        import json
+        folder = ROOT / 'firmware/QCA9377/hw1.0'
+        self.assertEqual(p.QCA9377_DELL_BOARD_KEY,
+            'bus=pci,vendor=168c,device=0042,subsystem-vendor=1028,subsystem-device=1818')
+        self.assertNotEqual(p.QCA9377_DELL_BOARD_KEY, p.QCA9377_BOARD_KEY)
+        files, header, entry = p.prepare_profile(ROOT, folder, 'Ath10kPayload9377Dell',
+            p.QCA9377_DELL_BOARD_KEY, 'QCA9377/hw1.1-Dell-1028-1818',
+            ('0x0042', '0x1028', '0x1818', '1', '0x05020001u'), True, 'QCA9377Dell')
+        manifest = json.loads(files[ROOT / 'firmware/prepared/QCA9377Dell/manifest.json'])
+        self.assertEqual(manifest['board_key'], p.QCA9377_DELL_BOARD_KEY)
+        self.assertEqual(manifest['profile'], 'QCA9377/hw1.1-Dell-1028-1818')
+        self.assertIn(manifest['board_selection'], ('board-api2-exact', 'board-api1-fallback'))
+        self.assertEqual(manifest['firmware_version'], 'WLAN.TF.2.1-00021-QCARMSWP-1')
+        self.assertEqual(manifest['firmware_bytes'], 727125)
+        self.assertEqual(manifest['otp_bytes'], 24193)
+        self.assertEqual(manifest['board_bytes'], 8124)
+        if manifest['board_selection'] == 'board-api1-fallback':
+            self.assertEqual(manifest['board_sha256'],
+                '127d35d82edb46278f30c448cbca664d755ff0d5fed57b649959cdbc4208c768')
+        self.assertIn('0x0042, 0x1028, 0x1818, 1, 0x05020001u', entry)
+        self.assertIn('Ath10kPayload9377Dell::kBoardKey', entry)
+        # Generic profile output directory is unchanged and not shared with Dell.
+        gfiles, _, _ = p.prepare_profile(ROOT, folder, 'Ath10kPayload9377', p.QCA9377_BOARD_KEY,
+            'QCA9377/hw1.1', ('0x0042', '0x1235', '0x0901', '1', '0x05020001u'), True)
+        self.assertIn(ROOT / 'firmware/prepared/QCA9377/manifest.json', gfiles)
+        self.assertFalse(set(gfiles) & set(files))
+
     def test_fallback_rejects_corrupt_container_and_foreign_firmware(self):
         import tempfile
         import shutil

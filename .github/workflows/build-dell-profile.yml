@@ -5,50 +5,102 @@ on:
   push:
     paths:
       - '.github/workflows/build-dell-profile.yml'
-      - 'qca9377-dell-board-profile.patch'
+      - 'scripts/**'
+      - 'tests/**'
+      - 'firmware/**'
+      - 'src/**'
+      - 'Makefile'
+      - 'Ath10kMac.kext/**'
 
 permissions:
   contents: read
 
 jobs:
   build:
-    # Intel macOS runner matches this project's x86_64 kext target.
+    # Intel macOS runner matches this project's x86_64 kext target (same as the release workflow).
     runs-on: macos-15-intel
-    timeout-minutes: 30
+    timeout-minutes: 45
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+      DELL_BOARD_KEY: bus=pci,vendor=168c,device=0042,subsystem-vendor=1028,subsystem-device=1818
     steps:
       - name: Checkout repository and submodules
         uses: actions/checkout@v4
         with:
           submodules: recursive
 
-      - name: Apply Dell QCA9377 profile patch
+      - name: Show toolchain
         run: |
-          git apply --check qca9377-dell-board-profile.patch
-          git apply qca9377-dell-board-profile.patch
+          xcodebuild -version
+          xcrun --show-sdk-path
+          python3 --version
 
-      - name: Generate payload and run payload tests
+      - name: Prepare payloads (fails on any validation error)
+        run: python3 scripts/prepare-firmware.py
+
+      - name: Committed generated payload must match regenerated payload
         run: |
-          python3 scripts/prepare-firmware.py
-          python3 -m unittest discover -s tests -p 'test_payload.py' -v
+          git status --short
+          git diff --exit-code -- src/kext/Ath10kPayload.hpp firmware/prepared
+          test -z "$(git ls-files --others --exclude-standard -- firmware/prepared src/kext)"
+
+      - name: Dell profile present in generated header and manifest
+        run: |
+          grep -F "$DELL_BOARD_KEY" src/kext/Ath10kPayload.hpp
+          grep -F "0x0042, 0x1028, 0x1818, 1, 0x05020001u" src/kext/Ath10kPayload.hpp
+          grep -F "namespace Ath10kPayload9377Dell" src/kext/Ath10kPayload.hpp
+          grep -F "QCA9377/hw1.1-Dell-1028-1818" firmware/prepared/QCA9377Dell/manifest.json
+          grep -F '"board_selection"' firmware/prepared/QCA9377Dell/manifest.json
+          # Generic profile must remain separate.
+          grep -F "0x0042, 0x1235, 0x0901, 1, 0x05020001u" src/kext/Ath10kPayload.hpp
+          test -f firmware/prepared/QCA9377/manifest.json
+
+      - name: Python payload regression tests
+        run: python3 -m unittest discover -s tests -p 'test_payload.py' -v
+
+      - name: Focused C++ QCA9377/Dell profile-selection test
+        run: |
+          set -eu
+          t="$(mktemp -d)"
+          mkdir -p "$t/IOKit"
+          cp tests/mock_iolib.h "$t/IOKit/IOLib.h"
+          printf '#pragma once\n#include <cstdint>\nusing UInt8 = uint8_t;\nusing UInt16 = uint16_t;\nusing UInt32 = uint32_t;\nusing UInt64 = uint64_t;\n' > "$t/IOKit/IOTypes.h"
+          python3 tests/extract-production.py "$t/driver_methods.inc"
+          c++ -std=c++17 -O2 -Wall -Wextra -Werror -fsanitize=address,undefined \
+            -I"$t" -Isrc/kext tests/test_qca9377_flow.cpp -o "$t/qca9377"
+          ASAN_OPTIONS=detect_leaks=0 "$t/qca9377"
+          echo "QCA9377 + Dell profile-selection test passed (host mocks only; no hardware)."
 
       - name: Build x86_64 kext
         run: |
-          xcode-select -p
-          xcrun --show-sdk-path
           make clean
-          make
+          make -j"$(sysctl -n hw.logicalcpu)" kext
+
+      - name: Verify kext architecture and Dell profile in build
+        run: |
+          bin=build/out/Ath10kMac.kext/Contents/MacOS/Ath10kMac
+          test -f "$bin"
+          test -f build/out/Ath10kMac.kext/Contents/Info.plist
+          xcrun lipo "$bin" -verify_arch x86_64
+          test "$(xcrun lipo "$bin" -archs)" = "x86_64"
+          # The Dell board key string must be compiled into the binary.
+          strings -a "$bin" | grep -F "$DELL_BOARD_KEY"
 
       - name: Package build artifact
         run: |
-          test -f build/out/Ath10kMac.kext/Contents/MacOS/Ath10kMac
+          set -eu
           mkdir -p dist
           ditto -c -k --sequesterRsrc --keepParent build/out/Ath10kMac.kext dist/Ath10kMac-QCA9377-Dell.kext.zip
-          shasum -a 256 dist/Ath10kMac-QCA9377-Dell.kext.zip | tee dist/SHA256SUMS.txt
+          unzip -t dist/Ath10kMac-QCA9377-Dell.kext.zip
+          (cd dist && shasum -a 256 Ath10kMac-QCA9377-Dell.kext.zip | tee SHA256SUMS.txt)
+          shasum -a 256 -c dist/SHA256SUMS.txt 2>/dev/null || (cd dist && shasum -a 256 -c SHA256SUMS.txt)
+          printf 'commit=%s\nboard_key=%s\nNOTE: compiled and profile-selection tested with host mocks only; real Dell hardware operation is UNVERIFIED.\n' \
+            "$GITHUB_SHA" "$DELL_BOARD_KEY" > dist/BUILD-INFO.txt
 
       - name: Upload kext artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Ath10kMac-QCA9377-Dell-kext
+          name: Ath10kMac-QCA9377-Dell-kext-${{ github.sha }}
           path: dist/*
           if-no-files-found: error
           retention-days: 7

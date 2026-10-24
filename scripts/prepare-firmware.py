@@ -15,6 +15,7 @@ FW_MAGIC = b"QCA-ATH10K\0"
 BOARD_KEY = "bus=pci,vendor=168c,device=003e,subsystem-vendor=1028,subsystem-device=0310"
 BOARD_SIZE = 8124
 QCA9377_BOARD_KEY = "bus=pci,vendor=168c,device=0042,subsystem-vendor=1235,subsystem-device=0901"
+QCA9377_DELL_BOARD_KEY = "bus=pci,vendor=168c,device=0042,subsystem-vendor=1028,subsystem-device=1818"
 
 class BoardNotFound(ValueError):
     """Only a well-formed API2 container without a match allows API1 fallback."""
@@ -149,7 +150,7 @@ def parse_segments(image):
     raise ValueError("SGMT DONE marker missing")
 
 
-def prepare_profile(root, folder, namespace, board_key, profile, identity, allow_fallback=False):
+def prepare_profile(root, folder, namespace, board_key, profile, identity, allow_fallback=False, prepared_subdir=None):
     board_container = (folder / "board-2.bin").read_bytes()
     fw_container = (folder / "firmware-6.bin").read_bytes()
     selection = "board-api2-exact"
@@ -215,7 +216,11 @@ def prepare_profile(root, folder, namespace, board_key, profile, identity, allow
     header += ["};", f"static constexpr UInt32 kFirmwareSegmentCount = {len(segments)};",
                f"static constexpr UInt32 kFirmwareSegmentDataBytes = {sum(s['length'] for s in segments)};",
                f"static constexpr UInt32 kFirmwareEntryAddress = 0x{entry:08x}u;", "}", ""]
-    outdir = root / "firmware/prepared" / ("QCA9377" if allow_fallback else "")
+    if prepared_subdir is None:  # backward compatible default
+        prepared_subdir = "QCA9377" if allow_fallback else ""
+    outdir = root / "firmware/prepared"
+    if prepared_subdir:
+        outdir = outdir / prepared_subdir
     outputs = {
         outdir / "board.bin": board,
         outdir / "otp.bin": parts[4],
@@ -245,6 +250,10 @@ def prepare(root):
          ('0x003e', '0x1028', '0x0310', '10', '0x05030000u'), False),
         (root / 'firmware/QCA9377/hw1.0', 'Ath10kPayload9377', QCA9377_BOARD_KEY, 'QCA9377/hw1.1',
          ('0x0042', '0x1235', '0x0901', '1', '0x05020001u'), True),
+        # Dell Inspiron 14 3467 (subsystem 1028:1818): exact API2 entry if present,
+        # otherwise only the validated API1 fallback. Separate from the generic profile.
+        (root / 'firmware/QCA9377/hw1.0', 'Ath10kPayload9377Dell', QCA9377_DELL_BOARD_KEY,
+         'QCA9377/hw1.1-Dell-1028-1818', ('0x0042', '0x1028', '0x1818', '1', '0x05020001u'), True, 'QCA9377Dell'),
     ]
     for args in profiles:
         files, lines, entry = prepare_profile(root, *args)
