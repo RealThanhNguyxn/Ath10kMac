@@ -18,7 +18,7 @@ diff --git a/scripts/prepare-firmware.py b/scripts/prepare-firmware.py
      board_container = (folder / "board-2.bin").read_bytes()
      fw_container = (folder / "firmware-6.bin").read_bytes()
      selection = "board-api2-exact"
-@@ -216,6 +217,11 @@ def prepare_profile(root, folder, namespace, board_key, profile, identity, allow
+@@ -216,6 +217,10 @@ def prepare_profile(root, folder, namespace, board_key, profile, identity, allow
                 f"static constexpr UInt32 kFirmwareEntryAddress = 0x{entry:08x}u;", ""]
  
 -    outdir = root / "firmware/prepared" / ("QCA9377" if allow_fallback else "")
